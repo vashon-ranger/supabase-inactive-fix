@@ -1,0 +1,8 @@
+[
+  {
+    "name": "WrapScheduler",
+    "supabase_url": "https://xesucewxsyrwlihrjnjw.supabase.co",
+    "supabase_key_env": "SUPABASE_KEY_1",
+    "table_name": "keep-alive"
+  }
+]
