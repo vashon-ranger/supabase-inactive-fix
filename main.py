@@ -7,10 +7,10 @@ from helpers.utils import generate_secure_random_string
 from services.supabase_service import SupabaseClient
 
 # User-defined variables to toggle additional features
-log_failed_databases = True  # Set to True to log failed databases
-detailed_status_report = True  # Set to True to generate a detailed status report
+log_failed_databases = True 
+detailed_status_report = True 
 
-# Configure logging with timestamp
+# Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
@@ -18,7 +18,6 @@ logging.basicConfig(
 )
 
 def main():
-    # Load configurations from config.json
     try:
         with open('config.json', 'r') as config_file:
             configs = json.load(config_file)
@@ -29,20 +28,16 @@ def main():
         logging.error(f"Error parsing 'config.json': {e}")
         return
 
-    all_successful = True  # Flag to track overall success
-
-    # Initialize lists for additional features
+    all_successful = True
     failed_databases = [] if log_failed_databases else None
     status_report = [] if detailed_status_report else None
 
-    # Iterate over each configuration
     for config in configs:
         name = config.get('name', 'Unnamed Database')
         url = config.get('supabase_url')
         key = config.get('supabase_key')
         table_name = config.get('table_name', 'KeepAlive')
 
-        # If using environment variables for keys
         key_env_var = config.get('supabase_key_env')
         if key_env_var:
             key = os.getenv(key_env_var)
@@ -56,47 +51,51 @@ def main():
 
         logging.info(f"Processing database: {name}")
 
-        # Initialize Supabase client for this configuration
         supabase_client = SupabaseClient(url, key, table_name)
 
-        # Generate a random string
-        random_name = generate_secure_random_string(10)
-
-        # Insert the random name into the table
-        success_insert = supabase_client.insert_random_name(random_name)
+        # --- BATCH INSERTION (10 Items) ---
+        logging.info("Generating and inserting 10 random strings...")
+        
+        # Generate 10 random strings locally
+        random_names_list = [generate_secure_random_string(10) for _ in range(10)]
+        
+        # Perform batch insert
+        success_insert = supabase_client.insert_batch_names(random_names_list)
+        
         if not success_insert:
             all_successful = False
+            logging.error("Batch insertion failed.")
             if log_failed_databases:
                 failed_databases.append(name)
-            # Proceed to next database since insertion failed
-            continue
+            # Depending on logic, you might want to `continue` here. 
+            # We proceed to check count/cleanup regardless.
 
-        # Get the count of entries in the table
+        # --- CHECK COUNT ---
         count = supabase_client.get_table_count()
         if count is None:
-            logging.error(f"Failed to get count for table '{table_name}' in database '{name}'.")
+            logging.error(f"Failed to get count for table '{table_name}'.")
             all_successful = False
-            if log_failed_databases:
+            if log_failed_databases and name not in failed_databases:
                 failed_databases.append(name)
-            continue  # Skip to next configuration
+            continue
 
-        logging.info(f"Current number of entries in '{table_name}': {count}")
+        logging.info(f"Current entries in '{table_name}': {count}")
 
-        # Initialize success_delete to None
+        # --- BATCH DELETION (Threshold > 100) ---
         success_delete = None
-
-        # If there are more than 10 entries, delete a random one
-        if count > 10:
-            logging.info(f"Table '{table_name}' has more than 10 entries. Deleting a random entry.")
-            success_delete = supabase_client.delete_random_entry()
+        if count > 100:
+            logging.info(f"Count ({count}) > 100. Deleting 10 random entries...")
+            success_delete = supabase_client.delete_batch_random_entries(limit=10)
+            
             if not success_delete:
                 all_successful = False
+                logging.error("Batch deletion failed.")
                 if log_failed_databases and name not in failed_databases:
                     failed_databases.append(name)
         else:
-            logging.info(f"Table '{table_name}' has 10 or fewer entries. No deletion needed.")
+            logging.info(f"Count ({count}) is within limits. No deletion needed.")
 
-        # Collect status information
+        # --- STATUS REPORTING ---
         if detailed_status_report:
             status = {
                 'name': name,
@@ -106,12 +105,11 @@ def main():
             }
             status_report.append(status)
 
-    # After processing all configurations
+    # --- FINAL LOGGING ---
     if all_successful:
         logging.info("All database actions were successful.")
     else:
         logging.warning("Some database actions failed.")
-
         if log_failed_databases and failed_databases:
             logging.warning("Failed databases:")
             for db_name in failed_databases:
@@ -121,13 +119,12 @@ def main():
         logging.info("\nDetailed Status Report:")
         for status in status_report:
             logging.info(f"Database: {status['name']}")
-            logging.info(f"  Insert Success: {status['success_insert']}")
-            logging.info(f"  Entry Count: {status['count']}")
+            logging.info(f"  Insert Batch (10): {status['success_insert']}")
+            logging.info(f"  Total Count: {status['count']}")
             if status['success_delete'] is not None:
-                logging.info(f"  Delete Success: {status['success_delete']}")
+                logging.info(f"  Delete Batch (10): {status['success_delete']}")
             else:
-                logging.info("  Delete Success: N/A")
-
+                logging.info("  Delete Batch: N/A")
 
 if __name__ == "__main__":
     main()
