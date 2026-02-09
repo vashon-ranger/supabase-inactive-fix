@@ -1,8 +1,7 @@
-# main.py
-
 import json
 import os
 import logging
+import sys  # <--- IMPORT SYS MODULE
 from helpers.utils import generate_secure_random_string
 from services.supabase_service import SupabaseClient
 
@@ -26,10 +25,10 @@ def main():
             configs = json.load(config_file)
     except FileNotFoundError:
         logging.error("Configuration file 'config.json' not found.")
-        return
+        sys.exit(1) # <--- EXIT WITH FAILURE
     except json.JSONDecodeError as e:
         logging.error(f"Error parsing 'config.json': {e}")
-        return
+        sys.exit(1) # <--- EXIT WITH FAILURE
 
     all_successful = True
     failed_databases = [] if LOG_FAILED_DBS else None
@@ -126,6 +125,11 @@ def main():
                 logging.info(f"  Delete Batch ({BATCH_SIZE}): {status['success_delete']}")
             else:
                 logging.info("  Delete Batch: N/A")
+
+    # --- EXIT WITH ERROR CODE IF ANY FAILURES OCCURRED ---
+    if not all_successful:
+        logging.error("Exiting with failure code because one or more databases failed.")
+        sys.exit(1)  # <--- THIS TELLS GITHUB ACTIONS TO FAIL THE WORKFLOW
 
 if __name__ == "__main__":
     main()
