@@ -1,6 +1,6 @@
 # services/supabase_service.py
 
-from supabase import create_client, Client
+from supabase import create_client, Client, ClientOptions
 import random
 
 class SupabaseClient:
@@ -8,14 +8,24 @@ class SupabaseClient:
         if not url or not key:
             raise ValueError("Supabase URL and Key must be provided.")
 
-        self.client: Client = create_client(url, key)
+        # --- UPDATE: SPOOF USER AGENT ---
+        # mimic a standard Chrome browser on Windows
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "*/*",
+            "Connection": "keep-alive"
+        }
+        
+        # Initialize client with custom headers
+        self.client: Client = create_client(
+            url, 
+            key, 
+            options=ClientOptions(headers=headers)
+        )
         self.table_name = table_name
 
     def insert_batch_names(self, names_list):
-        """
-        Inserts a list of names in a single API call.
-        """
-        # Prepare list of dictionaries
+        # ... (rest of the code remains the same)
         data = [{'name': name} for name in names_list]
         try:
             response = self.client.table(self.table_name).insert(data).execute()
@@ -26,8 +36,8 @@ class SupabaseClient:
             return False
 
     def get_table_count(self):
+        # ... (rest of the code remains the same)
         try:
-            # count='exact' + head=True means we don't fetch the actual data rows, just the count
             response = self.client.table(self.table_name).select('*', count='exact', head=True).execute()
             if response.count is not None:
                 return response.count
@@ -39,33 +49,21 @@ class SupabaseClient:
             return None
 
     def delete_batch_random_entries(self, limit=10):
-        """
-        Deletes a specific number of random entries in a single API call.
-        """
+        # ... (rest of the code remains the same)
         try:
-            # 1. Fetch IDs (limit the fetch to a reasonable number to pick from, e.g. 1000, or all)
-            # We only need the 'id' column.
             response = self.client.table(self.table_name).select('id').limit(1000).execute()
-            
             if response.data:
                 all_ids = [item['id'] for item in response.data]
-                
                 if not all_ids:
-                    print(f"No entries to delete in '{self.table_name}'.")
                     return True
 
-                # 2. Randomly select up to 'limit' IDs
-                # Use min() to handle cases where table has fewer rows than 'limit'
                 count_to_delete = min(len(all_ids), limit)
                 ids_to_delete = random.sample(all_ids, count_to_delete)
 
-                # 3. Delete the selected IDs in one batch using the .in_() filter
                 self.client.table(self.table_name).delete().in_('id', ids_to_delete).execute()
-                
                 print(f"Batch deleted {count_to_delete} entries from '{self.table_name}'.")
                 return True
             else:
-                print(f"No data retrieved from '{self.table_name}' for deletion.")
                 return False
         except Exception as e:
             print(f"Error deleting data from '{self.table_name}': {e}")
