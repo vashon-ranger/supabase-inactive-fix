@@ -1,18 +1,19 @@
+# main.py
+
 import json
 import os
 import logging
-import sys  # <--- IMPORT SYS MODULE
+import sys
 from helpers.utils import generate_secure_random_string
 from services.supabase_service import SupabaseClient
 
 # --- CONFIGURATION ---
-BATCH_SIZE = 20          # Number of rows to insert (and delete) per run
-MAX_ROW_COUNT = 100      # Max rows allowed before deletion triggers
-LOG_FAILED_DBS = True    # Log failed databases
-DETAILED_REPORT = True   # Generate detailed status report
+BATCH_SIZE = 20         
+MAX_ROW_COUNT = 100      
+LOG_FAILED_DBS = True    
+DETAILED_REPORT = True   
 # ---------------------
 
-# Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
@@ -25,10 +26,10 @@ def main():
             configs = json.load(config_file)
     except FileNotFoundError:
         logging.error("Configuration file 'config.json' not found.")
-        sys.exit(1) # <--- EXIT WITH FAILURE
+        sys.exit(1)
     except json.JSONDecodeError as e:
         logging.error(f"Error parsing 'config.json': {e}")
-        sys.exit(1) # <--- EXIT WITH FAILURE
+        sys.exit(1)
 
     all_successful = True
     failed_databases = [] if LOG_FAILED_DBS else None
@@ -53,83 +54,65 @@ def main():
 
         logging.info(f"Processing database: {name}")
 
-        supabase_client = SupabaseClient(url, key, table_name)
+        try:
+            supabase_client = SupabaseClient(url, key, table_name)
 
-        # --- BATCH INSERTION ---
-        logging.info(f"Generating and inserting {BATCH_SIZE} random strings...")
-        
-        # Generate random strings locally using the global BATCH_SIZE
-        random_names_list = [generate_secure_random_string(10) for _ in range(BATCH_SIZE)]
-        
-        # Perform batch insert
-        success_insert = supabase_client.insert_batch_names(random_names_list)
-        
-        if not success_insert:
+            # --- 1. READ ACTIVITY (Force a "Wake Up") ---
+            # Instead of just counting, we fetch a few rows to force a READ event
+            # We don't do anything with them, just proving we are reading.
+            supabase_client.client.table(table_name).select("name").limit(5).execute()
+
+            # --- 2. WRITE ACTIVITY (Insert Batch) ---
+            logging.info(f"Generating and inserting {BATCH_SIZE} random strings...")
+            random_names_list = [generate_secure_random_string(10) for _ in range(BATCH_SIZE)]
+            
+            success_insert = supabase_client.insert_batch_names(random_names_list)
+            
+            if not success_insert:
+                all_successful = False
+                if LOG_FAILED_DBS:
+                    failed_databases.append(name)
+
+            # --- 3. COUNT CHECK ---
+            count = supabase_client.get_table_count()
+            if count is None:
+                all_successful = False
+                continue
+
+            logging.info(f"Current entries in '{table_name}': {count}")
+
+            # --- 4. DELETE ACTIVITY ---
+            success_delete = None
+            if count > MAX_ROW_COUNT:
+                logging.info(f"Count > {MAX_ROW_COUNT}. Cleaning up...")
+                success_delete = supabase_client.delete_batch_random_entries(limit=BATCH_SIZE)
+                if not success_delete:
+                    all_successful = False
+            
+            # Reporting
+            if DETAILED_REPORT:
+                status_report.append({
+                    'name': name,
+                    'success_insert': success_insert,
+                    'success_delete': success_delete,
+                    'count': count
+                })
+
+        except Exception as e:
+            logging.error(f"Critical error processing '{name}': {e}")
             all_successful = False
-            logging.error("Batch insertion failed.")
             if LOG_FAILED_DBS:
                 failed_databases.append(name)
 
-        # --- CHECK COUNT ---
-        count = supabase_client.get_table_count()
-        if count is None:
-            logging.error(f"Failed to get count for table '{table_name}'.")
-            all_successful = False
-            if LOG_FAILED_DBS and name not in failed_databases:
-                failed_databases.append(name)
-            continue
-
-        logging.info(f"Current entries in '{table_name}': {count}")
-
-        # --- BATCH DELETION ---
-        success_delete = None
-        if count > MAX_ROW_COUNT:
-            logging.info(f"Count ({count}) > {MAX_ROW_COUNT}. Deleting {BATCH_SIZE} random entries...")
-            success_delete = supabase_client.delete_batch_random_entries(limit=BATCH_SIZE)
-            
-            if not success_delete:
-                all_successful = False
-                logging.error("Batch deletion failed.")
-                if LOG_FAILED_DBS and name not in failed_databases:
-                    failed_databases.append(name)
-        else:
-            logging.info(f"Count ({count}) is within limit ({MAX_ROW_COUNT}). No deletion needed.")
-
-        # --- STATUS REPORTING ---
-        if DETAILED_REPORT:
-            status = {
-                'name': name,
-                'success_insert': success_insert,
-                'success_delete': success_delete,
-                'count': count
-            }
-            status_report.append(status)
-
-    # --- FINAL LOGGING ---
-    if all_successful:
-        logging.info("All database actions were successful.")
-    else:
-        logging.warning("Some database actions failed.")
-        if LOG_FAILED_DBS and failed_databases:
-            logging.warning("Failed databases:")
-            for db_name in failed_databases:
-                logging.warning(f"- {db_name}")
-
+    # --- FINAL REPORT ---
     if DETAILED_REPORT and status_report:
         logging.info("\nDetailed Status Report:")
         for status in status_report:
-            logging.info(f"Database: {status['name']}")
-            logging.info(f"  Insert Batch ({BATCH_SIZE}): {status['success_insert']}")
-            logging.info(f"  Total Count: {status['count']}")
-            if status['success_delete'] is not None:
-                logging.info(f"  Delete Batch ({BATCH_SIZE}): {status['success_delete']}")
-            else:
-                logging.info("  Delete Batch: N/A")
+            logging.info(f"Database: {status['name']} | Count: {status['count']} | Insert: {status['success_insert']}")
 
-    # --- EXIT WITH ERROR CODE IF ANY FAILURES OCCURRED ---
     if not all_successful:
-        logging.error("Exiting with failure code because one or more databases failed.")
-        sys.exit(1)  # <--- THIS TELLS GITHUB ACTIONS TO FAIL THE WORKFLOW
+        logging.error("Exiting with failure code.")
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()
