@@ -4,12 +4,14 @@ import json
 import os
 import logging
 import sys
+import random  # <--- NEW IMPORT
 from helpers.utils import generate_secure_random_string
 from services.supabase_service import SupabaseClient
 
 # --- CONFIGURATION ---
-BATCH_SIZE = 20         
-MAX_ROW_COUNT = 100      
+MIN_BATCH_SIZE = 10      # Minimum items to insert/delete
+MAX_BATCH_SIZE = 30      # Maximum items to insert/delete
+MAX_ROW_COUNT = 100      # Max rows allowed before deletion triggers
 LOG_FAILED_DBS = True    
 DETAILED_REPORT = True   
 # ---------------------
@@ -59,12 +61,14 @@ def main():
 
             # --- 1. READ ACTIVITY (Force a "Wake Up") ---
             # Instead of just counting, we fetch a few rows to force a READ event
-            # We don't do anything with them, just proving we are reading.
             supabase_client.client.table(table_name).select("name").limit(5).execute()
 
-            # --- 2. WRITE ACTIVITY (Insert Batch) ---
-            logging.info(f"Generating and inserting {BATCH_SIZE} random strings...")
-            random_names_list = [generate_secure_random_string(10) for _ in range(BATCH_SIZE)]
+            # --- 2. WRITE ACTIVITY (Random Batch Insert) ---
+            # Calculate a unique random batch size for THIS specific run/table
+            current_insert_size = random.randint(MIN_BATCH_SIZE, MAX_BATCH_SIZE)
+            
+            logging.info(f"Generating and inserting {current_insert_size} random strings...")
+            random_names_list = [generate_secure_random_string(10) for _ in range(current_insert_size)]
             
             success_insert = supabase_client.insert_batch_names(random_names_list)
             
@@ -81,13 +85,28 @@ def main():
 
             logging.info(f"Current entries in '{table_name}': {count}")
 
-            # --- 4. DELETE ACTIVITY ---
+            # --- 4. DELETE ACTIVITY (Smart Random Delete) ---
             success_delete = None
+            
             if count > MAX_ROW_COUNT:
-                logging.info(f"Count > {MAX_ROW_COUNT}. Cleaning up...")
-                success_delete = supabase_client.delete_batch_random_entries(limit=BATCH_SIZE)
+                # Calculate how many we MUST delete to get back to the limit
+                excess = count - MAX_ROW_COUNT
+                
+                # Generate a random delete amount for variety
+                random_delete_target = random.randint(MIN_BATCH_SIZE, MAX_BATCH_SIZE)
+                
+                # Logic: Delete the GREATER of:
+                # A) The excess amount + 1 (to ensure we definitely go BELOW the limit)
+                # B) The random amount (to ensure we delete a decent chunk if excess is small)
+                rows_to_delete = max(excess + 1, random_delete_target)
+                
+                logging.info(f"Count > {MAX_ROW_COUNT}. Excess is {excess}. Deleting {rows_to_delete} entries...")
+                
+                success_delete = supabase_client.delete_batch_random_entries(limit=rows_to_delete)
                 if not success_delete:
                     all_successful = False
+            else:
+                 logging.info(f"Count ({count}) is within limit ({MAX_ROW_COUNT}). No deletion needed.")
             
             # Reporting
             if DETAILED_REPORT:
@@ -95,7 +114,8 @@ def main():
                     'name': name,
                     'success_insert': success_insert,
                     'success_delete': success_delete,
-                    'count': count
+                    'count': count,
+                    'inserted_amount': current_insert_size 
                 })
 
         except Exception as e:
@@ -108,7 +128,9 @@ def main():
     if DETAILED_REPORT and status_report:
         logging.info("\nDetailed Status Report:")
         for status in status_report:
-            logging.info(f"Database: {status['name']} | Count: {status['count']} | Insert: {status['success_insert']}")
+            # Safely handle 'inserted_amount' key for display
+            ins_amt = status.get('inserted_amount', 'N/A')
+            logging.info(f"Database: {status['name']} | Count: {status['count']} | Inserted: {ins_amt} | Success: {status['success_insert']}")
 
     if not all_successful:
         logging.error("Exiting with failure code.")
