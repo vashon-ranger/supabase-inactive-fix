@@ -22,4 +22,4 @@ jobs:
         uses: PhrozenByte/gh-workflow-immortality@v1
         with:
           secret: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
-          repos: ${{ vashon-ranger/supabase-inactive-fix }}
+          repos: vashon-ranger/supabase-inactive-fix
